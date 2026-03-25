@@ -1,0 +1,39 @@
+name: Daily Email Digest
+
+on:
+  schedule:
+    # 8:30 AM AEDT is 9:30 PM UTC (previous day)
+    # 30 21 * * *
+    - cron: '30 21 * * *'
+  workflow_dispatch: # Allows manual trigger
+
+jobs:
+  summarize:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+
+    - name: Inject credentials
+      run: |
+        echo "${{ secrets.TOKEN1_JSON_BASE64 }}" | base64 -d > token1.json
+        echo "${{ secrets.TOKEN2_JSON_BASE64 }}" | base64 -d > token2.json
+        echo "${{ secrets.TOKEN3_JSON_BASE64 }}" | base64 -d > token3.json
+        echo "${{ secrets.DOT_ENV_BASE64 }}" | base64 -d > .env
+
+    - name: Run Email Summariser
+      env:
+        GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      run: python main.py
