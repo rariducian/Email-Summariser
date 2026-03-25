@@ -26,10 +26,10 @@ jobs:
 
     - name: Inject credentials
       run: |
-        echo "${{ secrets.TOKEN1_JSON_BASE64 }}" | base64 -d > token1.json
-        echo "${{ secrets.TOKEN2_JSON_BASE64 }}" | base64 -d > token2.json
-        echo "${{ secrets.TOKEN3_JSON_BASE64 }}" | base64 -d > token3.json
-        echo "${{ secrets.DOT_ENV_BASE64 }}" | base64 -d > .env
+        printf "%s" "${{ secrets.TOKEN1_JSON_BASE64 }}" | base64 -d > token1.json
+        printf "%s" "${{ secrets.TOKEN2_JSON_BASE64 }}" | base64 -d > token2.json
+        printf "%s" "${{ secrets.TOKEN3_JSON_BASE64 }}" | base64 -d > token3.json
+        printf "%s" "${{ secrets.DOT_ENV_BASE64 }}" | base64 -d > .env
 
     - name: Run Email Summariser
       env:
