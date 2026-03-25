@@ -16,30 +16,31 @@ load_dotenv()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+
 SUMMARIZATION_PROMPT = """
-You are an expert Executive Assistant. Create a Daily Email Digest from the following emails.
+You are a highly efficient personal assistant. Your goal is to produce a high-fidelity "Briefing" for the user.
 
-NOISE FILTERING (apply before anything else):
-- SKIP entirely (do not include): authentication codes, OTPs, password resets, trade/order confirmations (e.g. nabtrade, brokerage receipts), shipping notifications, calendar invites, unsubscribe confirmations, marketing promos with no substantive content.
-- ONE-LINER only (include in a "Low Signal" section at the bottom): product update emails, app notifications, event reminders.
+### TONE & STYLE:
+- **Direct & Personal**: Speak directly to "You" (the user). No third-person generalisations (e.g., skip "for points-heavy travelers").
+- **Concise & Analytical**: No fluff. No conversational filler.
+- **Strict Formatting**: Use **Bold** for section headers and key terms only. Do NOT use italics. Do NOT use "Summarised for" or other meta-noise.
+- **High Fidelity**: Every point in "The Bottom Line" MUST have a corresponding breakdown in the briefing.
 
-FORMAT:
-1. **TLDR**: 3–5 sentences covering the most important themes and decisions worth acting on across all emails.
-2. **AI TIPS, LEARNINGS & TOOLS**: Any AI-related insights, tools, prompts, or technical developments. Exclude sponsored/promotional mentions.
-3. **EMAIL BREAKDOWN**: For each substantive email:
-   - **From**: [Sender] | **Subject**: [Title]
-   - **Core Argument**: What is the central claim or thesis? (1–2 sentences)
-   - **Key Evidence / Data**: Specific data points, stats, named examples, quotes, or research cited. Bullet each one.
-   - **Actionable / So What**: What should the reader do or think differently because of this? Any explicit recommendations?
-   - **Contrarian / Caveats**: Any pushback, uncertainty, or nuance the author acknowledges (or that's obviously missing)?
+### STRUCTURE:
+1. **The Bottom Line**: 3-4 bullet points summarizing the absolute must-know context for you today. **NEVER** mention system/infrastructure alerts (GitHub, Security, etc.) here. This is for content only.
+2. **⚡ Action Plan**: A consolidated list of next steps for you. Label each as `[URGENT ⚡]` or `[FYI ☕]`.
 
-4. **LOW SIGNAL** (one-liners only): List any deprioritised emails with a single sentence each.
+3. **📁 Categorized Briefing**: Group your emails by Topic (e.g., **Tech & AI**, **Markets**, **Lifestyle**).
+   Each entry must include:
+   - **Subject**: [Title]
+   - **Core Argument**: 1-2 sentences on the central claim.
+   - **Key Data**: Bulleted list of specific stats, examples, or quotes.
+   - **Caveat**: A single crisp sentence on the main limitation or uncertainty.
+   - **Reading Time**: "X min read" for the full source.
 
-RULES:
-- For newsletters: depth over breadth. Capture the argument, not just the topic.
-- Never describe what a publication "covers" — summarise what *this issue* said.
-- No category headers (Finance, Tech, etc.)
-- Flag if a summary is incomplete due to truncated email content.
+### NOISE FILTERING:
+- Ignore all authentication codes, OTPs, or trivial notifications.
+- System/Infra alerts (GitHub, Security, etc.) are handled separately- DO NOT include them in the summary.
 """
 
 # Configure Gemini
@@ -50,16 +51,14 @@ model = genai.GenerativeModel('gemini-flash-latest')
 def get_gmail_service(token_path: str):
     """Builds and returns a Gmail service object with debug logging."""
     if not os.path.exists(token_path):
-        print(f"❌ ERROR: File '{token_path}' does not exist. Check your GitHub Secrets!")
+        print(f"❌ ERROR: File '{token_path}' does not exist.")
         return None
     
     file_size = os.path.getsize(token_path)
     if file_size == 0:
-        print(f"❌ ERROR: File '{token_path}' is EMPTY. Check your GitHub Secrets encoding!")
+        print(f"❌ ERROR: File '{token_path}' is EMPTY.")
         return None
         
-    print(f"✅ File '{token_path}' loaded (Size: {file_size} bytes).")
-    
     try:
         creds = Credentials.from_authorized_user_file(token_path)
         return build('gmail', 'v1', credentials=creds)
@@ -67,7 +66,7 @@ def get_gmail_service(token_path: str):
         print(f"❌ ERROR: Failed to load credentials from {token_path}: {str(e)}")
         return None
 
-def fetch_recent_emails(service, max_results=10) -> List[Dict]:
+def fetch_recent_emails(service, max_results=15) -> List[Dict]:
     """Fetches emails from the last 24 hours."""
     now = datetime.datetime.now(datetime.timezone.utc)
     yesterday = now - datetime.timedelta(days=1)
@@ -85,7 +84,10 @@ def fetch_recent_emails(service, max_results=10) -> List[Dict]:
             
             subject = next((h['value'] for h in headers if h['name'] == 'Subject'), 'No Subject')
             sender = next((h['value'] for h in headers if h['name'] == 'From'), 'Unknown Sender')
-            date = next((h['value'] for h in headers if h['name'] == 'Date'), 'Unknown Date')
+            
+            # Smart pre-filtering of system noise
+            noise_keywords = ['security alert', 'github', 'sign-in', 'verification code', 'otp', 'unsubscribe', 'tos', 'privacy']
+            is_system = any(kw in subject.lower() or kw in sender.lower() for kw in noise_keywords)
             
             # Extract plain text body
             body = ""
@@ -101,8 +103,8 @@ def fetch_recent_emails(service, max_results=10) -> List[Dict]:
                 'id': msg['id'],
                 'subject': subject,
                 'sender': sender,
-                'date': date,
-                'body': body
+                'body': body,
+                'is_system': is_system
             })
         return email_data
     except HttpError as error:
@@ -114,36 +116,55 @@ def summarize_emails(emails: List[Dict]) -> str:
     if not emails:
         return "No new emails found."
     
+    content_emails = [e for e in emails if not e.is_system]
+    system_emails = [e for e in emails if e.is_system]
+    
     combined_text = ""
-    for idx, email in enumerate(emails):
+    for idx, email in enumerate(content_emails):
         combined_text += f"\n--- Email {idx+1} ---\n"
         combined_text += f"From: {email['sender']}\n"
         combined_text += f"Subject: {email['subject']}\n"
-        combined_text += f"Content: {email['body'][:5000]}\n" # Limit body per email to save tokens but allow depth
+        combined_text += f"Content: {email['body'][:6000]}\n"
 
     full_prompt = f"{SUMMARIZATION_PROMPT}\n\nHere are the emails:\n{combined_text}"
     
     response = model.generate_content(full_prompt)
-    return response.text
+    digest = response.text
+    
+    # Add Service Status footer if system emails exist (minimalist)
+    if system_emails:
+        digest += "\n\n**🛠 SERVICE HEALTH**\n"
+        digest += f"Ignored {len(system_emails)} automated alerts (GitHub, Security, etc.).\n"
+            
+    return digest
 
 def send_telegram_message(text: str):
-    """Sends a message to the specified Telegram chat."""
+    """Sends a message to Telegram with smart chunking."""
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     
-    # Handle long messages by splitting
-    max_len = 4000
-    for i in range(0, len(text), max_len):
-        chunk = text[i:i+max_len]
-        payload = {
-            "chat_id": TELEGRAM_CHAT_ID,
-            "text": chunk
-        }
-        print(f"Sending chunk {i//max_len + 1} to Telegram...")
+    # Smart chunking: Split by paragraphs to avoid cutting mid-sentence
+    max_len = 4096
+    paragraphs = text.split('\n\n')
+    current_chunk = ""
+    
+    chunks = []
+    for p in paragraphs:
+        if len(current_chunk) + len(p) + 2 > max_len:
+            chunks.append(current_chunk.strip())
+            current_chunk = p + "\n\n"
+        else:
+            current_chunk += p + "\n\n"
+    if current_chunk:
+        chunks.append(current_chunk.strip())
+
+    for idx, chunk in enumerate(chunks):
+        payload = {"chat_id": TELEGRAM_CHAT_ID, "text": chunk, "parse_mode": "Markdown"}
+        print(f"Sending part {idx+1}/{len(chunks)} to Telegram...")
         response = requests.post(url, json=payload)
         if response.status_code != 200:
-            print(f"Failed to send message: {response.status_code} - {response.text}")
-        else:
-            print(f"Successfully sent chunk {i//max_len + 1}")
+            # Fallback if Markdown fails
+            payload.pop("parse_mode")
+            requests.post(url, json=payload)
 
 def main():
     tokens = ['token1.json', 'token2.json', 'token3.json']
@@ -151,28 +172,21 @@ def main():
     
     for idx, token_path in enumerate(tokens):
         service = get_gmail_service(token_path)
-        if not service:
-            print(f"Skipping account {idx+1}: {token_path} not found.")
-            continue
+        if not service: continue
         
-        print(f"Fetching emails for Account {idx+1}...")
+        print(f"Fetching Account {idx+1}...")
         emails = fetch_recent_emails(service)
         all_emails.extend(emails)
 
     if not all_emails:
-        print("No new emails found across all accounts.")
-        send_telegram_message("📧 *Daily Email Digest*\n\nNo new emails found in the last 24 hours.")
+        send_telegram_message("📧 **Daily Email Digest**\n\nNo important emails found today.")
         return
 
-    print(f"Summarizing {len(all_emails)} emails...")
+    print(f"Processing {len(all_emails)} emails...")
     final_digest = summarize_emails(all_emails)
     
-    # Prepend dynamic header
-    header = f"📧 *Daily Email Digest - {datetime.date.today()}*\n"
-    header += f"👤 *Summarised for: mannhingkhor*\n\n"
+    header = f"📧 **Daily Email Digest - {datetime.date.today()}**\n\n"
     final_digest = header + final_digest
-
-    print("Sending digest to Telegram...")
     send_telegram_message(final_digest)
     print("Done!")
 
