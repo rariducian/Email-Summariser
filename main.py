@@ -48,11 +48,24 @@ genai.configure(api_key=GEMINI_API_KEY)
 model = genai.GenerativeModel('gemini-flash-latest')
 
 def get_gmail_service(token_path: str):
-    """Builds and returns a Gmail service object."""
+    """Builds and returns a Gmail service object with debug logging."""
     if not os.path.exists(token_path):
+        print(f"❌ ERROR: File '{token_path}' does not exist. Check your GitHub Secrets!")
         return None
-    creds = Credentials.from_authorized_user_file(token_path)
-    return build('gmail', 'v1', credentials=creds)
+    
+    file_size = os.path.getsize(token_path)
+    if file_size == 0:
+        print(f"❌ ERROR: File '{token_path}' is EMPTY. Check your GitHub Secrets encoding!")
+        return None
+        
+    print(f"✅ File '{token_path}' loaded (Size: {file_size} bytes).")
+    
+    try:
+        creds = Credentials.from_authorized_user_file(token_path)
+        return build('gmail', 'v1', credentials=creds)
+    except Exception as e:
+        print(f"❌ ERROR: Failed to load credentials from {token_path}: {str(e)}")
+        return None
 
 def fetch_recent_emails(service, max_results=10) -> List[Dict]:
     """Fetches emails from the last 24 hours."""
