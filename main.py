@@ -116,8 +116,8 @@ def summarize_emails(emails: List[Dict]) -> str:
     if not emails:
         return "No new emails found."
     
-    content_emails = [e for e in emails if not e.is_system]
-    system_emails = [e for e in emails if e.is_system]
+    content_emails = [e for e in emails if not e['is_system']]
+    system_emails = [e for e in emails if e['is_system']]
     
     combined_text = ""
     for idx, email in enumerate(content_emails):
